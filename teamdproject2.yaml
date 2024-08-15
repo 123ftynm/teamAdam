@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to deploy a REST API with CRUD operations on a DynamoDB table using a Lambda function.
+
+Parameters:
+  ApiName:
+    Type: String
+    Description: Name of the API Gateway
+    Default: MyRestApi
+
+  LambdaFunctionName:
+    Type: String
+    Description: Name of the Lambda function
+    Default: MyLambdaFunction
+
+  DynamoDBTableName:
+    Type: String
+    Description: Name of the DynamoDB table
+    Default: MyDynamoDBTable
+
+  StageName:
+    Type: String
+    Description: The deployment stage name for the API Gateway
+    Default: prod
+
+Resources:
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref DynamoDBTableName
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+            Action: 
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaDynamoDBPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs18.x
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const dynamo = new AWS.DynamoDB.DocumentClient();
+          
+          exports.handler = async (event) => {
+            let response;
+            const tableName = process.env.TABLE_NAME;
+            const id = event.pathParameters.id;
+            const body = event.body ? JSON.parse(event.body) : {};
+            
+            try {
+              switch(event.httpMethod) {
+                case 'GET':
+                  response = await dynamo.get({ TableName: tableName, Key: { id } }).promise();
+                  break;
+                case 'POST':
+                  response = await dynamo.put({ TableName: tableName, Item: body }).promise();
+                  break;
+                case 'PUT':
+                  response = await dynamo.update({
+                    TableName: tableName,
+                    Key: { id },
+                    UpdateExpression: 'set info = :info',
+                    ExpressionAttributeValues: {
+                      ':info': body.info
+                    },
+                    ReturnValues: 'UPDATED_NEW'
+                  }).promise();
+                  break;
+                case 'DELETE':
+                  response = await dynamo.delete({ TableName: tableName, Key: { id } }).promise();
+                  break;
+                default:
+                  throw new Error(`Unsupported method: ${event.httpMethod}`);
+              }
+              return { statusCode: 200, body: JSON.stringify(response) };
+            } catch (error) {
+              return { statusCode: 500, body: JSON.stringify({ error: error.message }) };
+            }
+          };
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DynamoDBTableName
+
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Ref ApiName
+      Description: REST API for Lambda CRUD operations on DynamoDB
+
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: "{id}"
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      ResourceId: !Ref ApiGatewayResource
+      RestApiId: !Ref ApiGatewayRestApi
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: 
+          Fn::Sub: 
+            - arn:aws:apigateway:${Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+            - Region: !Ref "AWS::Region"
+              LambdaArn: !GetAtt LambdaFunction.Arn
+
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: !Ref StageName
+    DependsOn:
+      - ApiGatewayMethod
+
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*/*/{id}"
+    DependsOn: 
+      - LambdaFunction
+      - ApiGatewayDeployment
+
+Outputs:
+  ApiUrl:
+    Description: The URL of the deployed API
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/"
+    Export:
+      Name: ApiUrl
+
+  LambdaFunctionArn:
+    Description: ARN of the Lambda Function
+    Value: !GetAtt LambdaFunction.Arn
