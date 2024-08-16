@@ -1,9 +1,45 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  DynamoDBTableName:
+    Type: String
+    Default: 'TDDynamoDBTable'
+    Description: 'Name of the DynamoDB table'
+  
+  S3BucketName:
+    Type: String
+    Default: 'tds3project-bucket'
+    Description: 'Name of the existing S3 bucket'
+  
+  GlueJobName:
+    Type: String
+    Default: 'TDS3ProjectGlueJob'
+    Description: 'Name of the Glue job'
+  
+  LambdaDynamoDBFunctionName:
+    Type: String
+    Default: 'TDS3ProjectDynamoDBFunction'
+    Description: 'Name of the DynamoDB Lambda function'
+  
+  LambdaS3FunctionName:
+    Type: String
+    Default: 'TDS3ProjectS3Function'
+    Description: 'Name of the S3 Lambda function'
+  
+  LambdaGlueJobFunctionName:
+    Type: String
+    Default: 'TDS3ProjectGlueJobFunction'
+    Description: 'Name of the Glue job Lambda function'
+  
+  ApiGatewayName:
+    Type: String
+    Default: 'TDS3ProjectApiGateway'
+    Description: 'Name of the API Gateway'
+
 Resources:
-  LambdaApiGateway:
+  TDDynamoDBTable:
     Type: 'AWS::DynamoDB::Table'
     Properties:
-      TableName: 'lambda-apigateway'
+      TableName: !Ref DynamoDBTableName
       AttributeDefinitions:
         - AttributeName: 'Id'
           AttributeType: 'S'
@@ -14,19 +50,14 @@ Resources:
         ReadCapacityUnits: 5
         WriteCapacityUnits: 5
 
-  TeamDMetro:
-    Type: 'AWS::S3::Bucket'
-    Properties:
-      BucketName: 'teamdmetro'
-
-  TeamDGlowJobNew:
+  TDS3ProjectGlueJob:
     Type: 'AWS::Glue::Job'
     Properties:
-      Name: 'teamdglowjobnew'
-      Role: !Ref TeamDGlueRole
+      Name: !Ref GlueJobName
+      Role: !GetAtt TDS3ProjectGlueRole.Arn
       Command:
         Name: 'glueetl'
-        ScriptLocation: 's3://teamdmetro/my-glue-job-script.py'
+        ScriptLocation: !Sub 's3://${S3BucketName}/my-glue-job-script.py'
         PythonVersion: '3'
       DefaultArguments:
         '--job-bookmark-option': 'job-bookmark-enable'
@@ -34,7 +65,7 @@ Resources:
         MaxConcurrentRuns: 2
       MaxRetries: 0
 
-  TeamDGlueRole:
+  TDS3ProjectGlueRole:
     Type: 'AWS::IAM::Role'
     Properties:
       AssumeRolePolicyDocument:
@@ -45,7 +76,7 @@ Resources:
               Service: 'glue.amazonaws.com'
             Action: 'sts:AssumeRole'
       Policies:
-        - PolicyName: 'teamds3policy'
+        - PolicyName: 'tds3project-glue-policy'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -53,10 +84,10 @@ Resources:
                 Action:
                   - 's3:*'
                 Resource:
-                  - 'arn:aws:s3:::teamdmetro'
-                  - 'arn:aws:s3:::teamdmetro/my-glue-job-script.py'
+                  - !Sub 'arn:aws:s3:::${S3BucketName}'
+                  - !Sub 'arn:aws:s3:::${S3BucketName}/my-glue-job-script.py'
 
-  TeamDAPIGatewayRole:
+  TDS3ProjectLambdaRole:
     Type: 'AWS::IAM::Role'
     Properties:
       AssumeRolePolicyDocument:
@@ -67,176 +98,127 @@ Resources:
               Service: 'lambda.amazonaws.com'
             Action: 'sts:AssumeRole'
       Policies:
-        - PolicyName: 'teamDAPIGatewayPolicy'
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: "Stmt1428341300017"
-                Action:
-                  - "dynamodb:DeleteItem"
-                  - "dynamodb:GetItem"
-                  - "dynamodb:PutItem"
-                  - "dynamodb:Query"
-                  - "dynamodb:Scan"
-                  - "dynamodb:UpdateItem"
-                Effect: "Allow"
-                Resource: "*"
-              - Sid: ""
-                Action:
-                  - "logs:CreateLogGroup"
-                  - "logs:CreateLogStream"
-                  - "logs:PutLogEvents"
-                Effect: "Allow"
-                Resource: "*"
-
-  TeamDMetroRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: 'Allow'
-            Principal:
-              Service: 'lambda.amazonaws.com'
-            Action: 'sts:AssumeRole'
-      Policies:
-        - PolicyName: 'teamdmetro'
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: "Allow"
-                Action:
-                  - "s3:PutObject"
-                  - "s3:GetObject"
-                Resource:
-                  - "arn:aws:s3:::teamdmetro"
-                  - "arn:aws:s3:::teamdmetro/*"
-
-  TeamDGlueLambdaRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: 'Allow'
-            Principal:
-              Service: 'lambda.amazonaws.com'
-            Action: 'sts:AssumeRole'
-      Policies:
-        - PolicyName: 'teamdgluePolicy'
+        - PolicyName: 'tds3project-lambda-policy'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: 'Allow'
                 Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:DescribeTable'
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:ListBucket'
+                  - 's3:CreateBucket'
                   - 'glue:StartJobRun'
-                  - 'glue:GetJobRun'
-                Resource: 'arn:aws:glue:us-east-1:411658317626:job/teamdglowjobnew'
+                  - 'glue:StopJobRun'
+                Resource: '*'
 
-  TeamDDynamoDBFunction:
+  TDS3ProjectDynamoDBFunction:
     Type: 'AWS::Lambda::Function'
     Properties:
-      FunctionName: 'TeamDdynamoDBlambda'
-      Runtime: 'nodejs20.x'
-      Role: !Ref TeamDAPIGatewayRole
-      Handler: 'index.handler'
-      Code:
-        S3Bucket: 'teamdmetro'
-        S3Key: 'zip'
-
-  TeamDS3Function:
-    Type: 'AWS::Lambda::Function'
-    Properties:
-      FunctionName: 'teamdfunctionnew'
+      FunctionName: !Ref LambdaDynamoDBFunctionName
       Runtime: 'python3.12'
-      Role: !Ref TeamDMetroRole
+      Role: !GetAtt TDS3ProjectLambdaRole.Arn
       Handler: 'lambda_function.lambda_handler'
       Code:
-        S3Bucket: 'teamdmetro'
-        S3Key: 'zip'
+        S3Bucket: !Ref S3BucketName
+        S3Key: 'dynamodb-zip'
 
-  TeamDGlueJobFunction:
+  TDS3ProjectS3Function:
     Type: 'AWS::Lambda::Function'
     Properties:
-      FunctionName: 'teamdglueLamdafunction'
+      FunctionName: !Ref LambdaS3FunctionName
       Runtime: 'python3.12'
-      Role: !Ref TeamDGlueLambdaRole
+      Role: !GetAtt TDS3ProjectLambdaRole.Arn
       Handler: 'lambda_function.lambda_handler'
       Code:
-        S3Bucket: 'teamdmetro'
-        S3Key: 'zip'
+        S3Bucket: !Ref S3BucketName
+        S3Key: 's3-zip'
 
-  TeamDApiGateway:
+  TDS3ProjectGlueJobFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Ref LambdaGlueJobFunctionName
+      Runtime: 'python3.12'
+      Role: !GetAtt TDS3ProjectLambdaRole.Arn
+      Handler: 'lambda_function.lambda_handler'
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: 'glue-zip'
+
+  TDS3ProjectApiGateway:
     Type: 'AWS::ApiGateway::RestApi'
     Properties:
-      Name: 'TeamdRESAPIGateway'
+      Name: !Ref ApiGatewayName
 
-  DynamoDBAPIResource:
+  TDS3ProjectDynamoDBAPIResource:
     Type: 'AWS::ApiGateway::Resource'
     Properties:
-      ParentId: !GetAtt TeamDApiGateway.RootResourceId
-      PathPart: 'TeamddynamoDBRessources'
-      RestApiId: !Ref TeamDApiGateway
+      ParentId: !GetAtt TDS3ProjectApiGateway.RootResourceId
+      PathPart: 'TDS3ProjectDynamoDBResources'
+      RestApiId: !Ref TDS3ProjectApiGateway
 
-  GlueJobApiResource:
+  TDS3ProjectGlueJobAPIResource:
     Type: 'AWS::ApiGateway::Resource'
     Properties:
-      ParentId: !GetAtt TeamDApiGateway.RootResourceId
-      PathPart: 'TeamdGlueRessources'
-      RestApiId: !Ref TeamDApiGateway
+      ParentId: !GetAtt TDS3ProjectApiGateway.RootResourceId
+      PathPart: 'TDS3ProjectGlueResources'
+      RestApiId: !Ref TDS3ProjectApiGateway
 
-  S3ApiResource:
+  TDS3ProjectS3APIResource:
     Type: 'AWS::ApiGateway::Resource'
     Properties:
-      ParentId: !GetAtt TeamDApiGateway.RootResourceId
-      PathPart: 'TeamdS3Ressources'
-      RestApiId: !Ref TeamDApiGateway
+      ParentId: !GetAtt TDS3ProjectApiGateway.RootResourceId
+      PathPart: 'TDS3ProjectS3Resources'
+      RestApiId: !Ref TDS3ProjectApiGateway
 
-  DynamoDBMethod:
+  TDS3ProjectDynamoDBMethod:
     Type: 'AWS::ApiGateway::Method'
     Properties:
       AuthorizationType: 'NONE'
       HttpMethod: 'POST'
-      ResourceId: !Ref DynamoDBAPIResource
-      RestApiId: !Ref TeamDApiGateway
+      ResourceId: !Ref TDS3ProjectDynamoDBAPIResource
+      RestApiId: !Ref TDS3ProjectApiGateway
       Integration:
         IntegrationHttpMethod: 'POST'
         Type: 'AWS_PROXY'
-        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${TeamDDynamoDBFunction.Arn}/invocations'
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${TDS3ProjectDynamoDBFunction.Arn}/invocations'
       MethodResponses:
         - StatusCode: '200'
 
-  GlueJobMethod:
+  TDS3ProjectGlueJobMethod:
     Type: 'AWS::ApiGateway::Method'
     Properties:
       AuthorizationType: 'NONE'
       HttpMethod: 'POST'
-      ResourceId: !Ref GlueJobApiResource
-      RestApiId: !Ref TeamDApiGateway
+      ResourceId: !Ref TDS3ProjectGlueJobAPIResource
+      RestApiId: !Ref TDS3ProjectApiGateway
       Integration:
         IntegrationHttpMethod: 'POST'
         Type: 'AWS_PROXY'
-        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${TeamDGlueJobFunction.Arn}/invocations'
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${TDS3ProjectGlueJobFunction.Arn}/invocations'
       MethodResponses:
         - StatusCode: '200'
 
-  S3Method:
+  TDS3ProjectS3Method:
     Type: 'AWS::ApiGateway::Method'
     Properties:
       AuthorizationType: 'NONE'
       HttpMethod: 'POST'
-      ResourceId: !Ref S3ApiResource
-      RestApiId: !Ref TeamDApiGateway
+      ResourceId: !Ref TDS3ProjectS3APIResource
+      RestApiId: !Ref TDS3ProjectApiGateway
       Integration:
         IntegrationHttpMethod: 'POST'
         Type: 'AWS_PROXY'
-        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${TeamDS3Function.Arn}/invocations'
+        Uri: !Sub 'arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/${TDS3ProjectS3Function.Arn}/invocations'
       MethodResponses:
         - StatusCode: '200'
 
-  TeamDApiDeployment:
+  TDS3ProjectApiDeployment:
     Type: 'AWS::ApiGateway::Deployment'
     Properties:
-      RestApiId: !Ref TeamDApiGateway
+      RestApiId: !Ref TDS3ProjectApiGateway
       StageName: 'prod'
-    DependsOn: [DynamoDBMethod, GlueJobMethod, S3Method]
+    DependsOn: [TDS3ProjectDynamoDBMethod, TDS3ProjectGlueJobMethod, TDS3ProjectS3Method]
